@@ -16,7 +16,8 @@ import (
 	"unicode/utf8"
 )
 
-// defaults depending if we're on mac and if an OPENAI_API_KEY is set
+// Template URL/model logic handles 4 cases depending on environment variables and platform.
+// This simplifies switching between local and cloud models without manual reconfiguration.
 var template = map[[2]bool][2]string{
 	{false, true}:  {"http://localhost:1234/v1/chat/completions", "lmstudio-community/Qwen3-4B-MLX-8bit"},
 	{false, false}: {"http://localhost:1234/v1/chat/completions", "qwen/qwen3-4b"},
@@ -25,13 +26,19 @@ var template = map[[2]bool][2]string{
 }[[2]bool{os.Getenv("OPENAI_API_KEY") != "", runtime.GOOS == "darwin"}]
 
 var (
-	apiURL  = flag.String("url", template[0], "API URL")
-	model   = flag.String("model", template[1], "Model to use (e.g., gpt-4.1-mini)")
+	// 'mission' encapsulates user intent and is reused across turns if not explicitly cleared.
+	// This supports multi-step planning without forcing repeated input.
 	mission = flag.String("mission", "", "Mission to complete")
+
+	apiURL = flag.String("url", template[0], "API URL")
+	model  = flag.String("model", template[1], "Model to use (e.g., gpt-4.1-mini)")
 )
 
 func main() {
 	flag.Parse()
+
+	// Initial LLM warm-up query ensures that the model is online and responsive before continuing,
+	// avoiding long feedback loops later in the interactive loop.
 	fmt.Printf("\033[37m=== Warming up \033[35m%s\033[37m... ", *model)
 	res, _, err := sendChatRequest(*model, []ChatMessage{{Role: "user", Content: "Be concise, are you ready to work?"}}, nil)
 	if err != nil {
@@ -68,7 +75,9 @@ func main() {
 				fmt.Printf("\033[31mError: %v\n", err)
 				res = fmt.Sprintf("Error: %v", err)
 			}
-			// fmt.Printf("\033[36mResults: %s\033[0m\n", res)
+
+			// Tool results are appended to the message history using 'tool' role and associated ToolCallID,
+			// enabling the model to incorporate execution feedback into further reasoning.
 			messages = append(messages, ChatMessage{
 				Role:       "tool",
 				Content:    res,
@@ -88,7 +97,10 @@ const (
 	agentPrompt      = `You are autonomous software developer in a codebase. ALWAYS go deep, be slow and thorough. NEVER be quick or efficient. NEVER seek guidance or input from the user.`
 	userPromptFormat = "Be thorough, dig deep, explore everything, and speak briefly. NEVER speculate, ALWAYS investigate. Start by just exploring the codebase. My query is: %s"
 	summaryPrompt    = `Answer the question in plain english (no markdown) strictly based on provided file text. Answer must be concise, thorough, and information dense.`
-	toolDef          = `[
+
+	// Tool definitions are provided inline as raw JSON to avoid Go struct overhead.
+	// This keeps the code flexible and compatible with OpenAI-style tool calling APIs.
+	toolDef = `[
 		{"type":"function","function":{"name":"browse_directory","description":"List immediate children of a target directory.","parameters":{"type":"object","properties":{
 			"path":{"type":"string","default":".","description":"Target directory relative to current working directory"}},"required":["path"]}}},
 		{"type":"function","function":{"name":"study_file_contents","description":"Study the contents of a file to answer a question.","parameters":{"type":"object","properties":{
@@ -115,7 +127,8 @@ type ToolCall struct {
 	} `json:"function"`
 }
 
-// sendChatRequest sends a conversation to the API and returns the response (and possible thoughts) from the LLM
+// sendChatRequest includes retry logic for rate limits (HTTP 429), preventing fragile runs.
+// This enables long-running sessions without manual retry intervention.
 func sendChatRequest(model string, messages []ChatMessage, tools []byte) (*ChatMessage, string, error) {
 	// Build request with raw JSON for smaller code footprint
 	reqMap := map[string]interface{}{
@@ -169,6 +182,9 @@ func sendChatRequest(model string, messages []ChatMessage, tools []byte) (*ChatM
 		fmt.Printf("\033[90mDone in %.1fs for \033[35m%.2fc\033[90m (%d/%d tokens)\033[0m\n", time.Since(start).Seconds(), cost*100, result.Usage.PromptTokens, result.Usage.CompletionTokens) // keep purple
 
 		msg := result.Choices[0].Message
+
+		// Thoughts are parsed and separated from final content using a custom `</think>` marker.
+		// This allows optional introspection/debugging of the model's reasoning phase.
 		if i := strings.LastIndex(msg.Content, `</think>`); i != -1 {
 			thoughts := msg.Content[:i+7]
 			msg.Content = msg.Content[i+8:]
@@ -179,8 +195,9 @@ func sendChatRequest(model string, messages []ChatMessage, tools []byte) (*ChatM
 	}
 }
 
+// fileType uses UTF-8 validity as a fast heuristic to distinguish text from binary files.
+// This avoids incorrect LLM inputs from non-text content, which could break prompt context.
 func fileType(path string) string {
-	// Check if file is text using MIME detection
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Sprintf("Error opening file: %v", err)
@@ -199,6 +216,7 @@ func fileType(path string) string {
 	return "binary"
 }
 
+// runTool executes any tool the LLM requests. It loosely prevents escaping the current working directory.
 func runTool(name, args string) (string, error) {
 	params := map[string]string{}
 	json.Unmarshal([]byte(args), &params)
@@ -246,7 +264,8 @@ func runTool(name, args string) (string, error) {
 	}
 	defer file.Close()
 
-	// Read file content (safely limited)
+	// file.Read is paginated using fixed byte chunks (2000 bytes per page) to safely handle large files.
+	// This prevents memory exhaustion and fits prompt size constraints for LLM input.
 	content, _ := io.ReadAll(io.NewSectionReader(file, int64(start*2000), 2000))
 
 	// Simple request for analysis
