@@ -16,7 +16,7 @@ go run github.com/dans-stuff/tinyagent/...
 
 ## Example
 
-
+<img width="815" alt="Screenshot 2025-05-17 at 11 50 03 AM" src="https://github.com/user-attachments/assets/2c57ac33-b38a-4f7f-8dfc-192d7982bfcc" />
 
 ## Contributing
 Contributions are welcome. Please fork the repository and submit pull requests for improvements or bug fixes.
