@@ -6,11 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -32,7 +32,7 @@ var (
 
 func main() {
 	flag.Parse()
-	fmt.Printf("\033[37m=== Warming up... ")
+	fmt.Printf("\033[37m=== Warming up \033[35m%s\033[37m... ", *model)
 	res, _, err := sendChatRequest(*model, []ChatMessage{{Role: "user", Content: "Be concise, are you ready to work?"}}, nil)
 	if err != nil {
 		fmt.Printf("\033[31mError: %v\n", err)
@@ -93,7 +93,8 @@ const (
 			"path":{"type":"string","default":".","description":"Target directory relative to current working directory"}},"required":["path"]}}},
 		{"type":"function","function":{"name":"study_file_contents","description":"Study the contents of a file to answer a question.","parameters":{"type":"object","properties":{
 			"path":{"type":"string","default":".","description":"Target file relative to current working directory"},
-			"question":{"type":"string","description":"What would you like to know about the file"} },"required":["path","question"]}}}
+			"page":{"type":"string","default":"0","description":"Which page of the file to access, each page is 2000 bytes"},
+			"question":{"type":"string","description":"What would you like to know about the file"} },"required":["path","chunk","question"]}}}
 		]`
 )
 
@@ -230,17 +231,13 @@ func runTool(name, args string) (string, error) {
 		return fmt.Sprintf("analyze_path `%s` results:\n%s", params["path"], strings.Join(parts, "\n")), nil
 	}
 
-	fmt.Printf("\033[90m🧠 Look at `\033[35m%v\033[90m`. %s ", params["path"], params["question"])
+	start, _ := strconv.Atoi(params["page"])
+	fmt.Printf("\033[90m🧠 Look at `\033[35m%v page %d\033[90m`. %s ", params["path"], start, params["question"])
 	if !filepath.IsLocal(params["path"]) {
 		return "", fmt.Errorf("Permanent Error: Path %s is outside of current working directory", params["path"])
 	}
 	if contentType := fileType(params["path"]); contentType != "text" {
 		return "", fmt.Errorf("Not a text file (detected: %s)", contentType)
-	}
-
-	stat, err := os.Stat(params["path"])
-	if err != nil {
-		return "", fmt.Errorf("Error getting file info: %v", err)
 	}
 
 	file, err := os.Open(params["path"])
@@ -250,13 +247,7 @@ func runTool(name, args string) (string, error) {
 	defer file.Close()
 
 	// Read file content (safely limited)
-	note := ""
-	start := int64(0)
-	if stat.Size() > 1000 {
-		start = rand.Int63n(stat.Size()/1000) * 1000
-		note = fmt.Sprintf("TRUNCATED FILE. Bytes %d to %d. Analyzing again will use a different random section.", start, start+1000)
-	}
-	content, _ := io.ReadAll(io.NewSectionReader(file, start, 1000))
+	content, _ := io.ReadAll(io.NewSectionReader(file, int64(start*2000), 2000))
 
 	// Simple request for analysis
 	msg, _, err := sendChatRequest(*model, []ChatMessage{
@@ -268,5 +259,5 @@ func runTool(name, args string) (string, error) {
 		return "", fmt.Errorf("Error analyzing file: %v", err)
 	}
 
-	return fmt.Sprintf("study_file_contents %v results\nQuestion: %s\nAnswer: %s.%s", params["path"], params["question"], msg.Content, note), nil
+	return fmt.Sprintf("study_file_contents %v results\nQuestion: %s\nAnswer: %s", params["path"], params["question"], msg.Content), nil
 }
