@@ -4,7 +4,9 @@ Example LLM agent for academic purposes. It has a very simple architecture:
 - The LLM is given a mission and some tools
 - It is called repeatedly until it emits a final message
 
-This LLM is **Read-Only** and limited to the **Working Directory** as it lacks safety features for writing.
+This LLM is **Read-Only** and attempts to stay inside the **Working Directory** as it lacks safety features for writing.
+
+* Note is it possible the Agent can break out of the working directory and send ANY file on your computer to the API.
 
 It supports LM Studio (*recommended*) or any other OpenAI compatible API.
 
