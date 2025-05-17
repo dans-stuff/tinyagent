@@ -11,7 +11,7 @@ It supports LM Studio (*recommended*) or any other OpenAI compatible API.
 ## Usage
 
 ```bash
-go run github.com/dans-stuff/tinyagent/...
+go run github.com/dans-stuff/tinyagent@main
 ```
 
 ## Example
